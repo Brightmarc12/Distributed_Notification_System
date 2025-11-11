@@ -1,0 +1,24 @@
+{
+  "name": "push_service",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Push notification service for distributed notification system",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "amqplib": "^0.10.9",
+    "dotenv": "^17.2.3",
+    "firebase-admin": "^13.6.0",
+    "opossum": "^8.1.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

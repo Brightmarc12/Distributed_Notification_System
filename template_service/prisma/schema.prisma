@@ -1,0 +1,46 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// An enum to define the allowed types of templates
+enum TemplateType {
+  EMAIL
+  PUSH
+}
+
+// The parent model for a unique template identifier
+model Template {
+  id        String   @id @default(uuid())
+  // A unique, human-readable name like 'welcome-email' or 'password-reset'
+  name      String   @unique
+  type      TemplateType
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // A template can have many different versions
+  versions  TemplateVersion[]
+}
+
+// A specific version of a template's content
+model TemplateVersion {
+  id         String   @id @default(uuid())
+  subject    String? // Subject is optional (e.g., for push notifications)
+  body       String   @db.Text // Use the Text type for potentially long content
+  language   String   @default("en") // Default language to English
+  is_active  Boolean  @default(true) // The currently active version
+  version    Int      @default(1)
+  createdAt  DateTime @default(now())
+
+  // Relation to the parent Template
+  template   Template @relation(fields: [template_id], references: [id], onDelete: Cascade)
+  template_id String
+
+  // A template name + language + version must be unique
+  @@unique([template_id, language, version])
+}

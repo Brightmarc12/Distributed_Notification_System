@@ -1,0 +1,54 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model for authentication and basic info
+model User {
+  id                      String    @id @default(uuid())
+  email                   String    @unique
+  password_hash           String
+  first_name              String? // Optional field
+  last_name               String? // Optional field
+  created_at              DateTime  @default(now())
+  updated_at              DateTime  @updatedAt
+
+  // A user has one set of notification preferences
+  notification_preference NotificationPreference?
+  // A user can have many push tokens (for different devices)
+  push_tokens             PushToken[]
+}
+
+// Manages a user's notification preferences
+model NotificationPreference {
+  id             String   @id @default(uuid())
+  email_enabled  Boolean  @default(true)
+  push_enabled   Boolean  @default(true)
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  // Relation to the User model (one-to-one)
+  user           User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  user_id        String   @unique // Foreign key
+}
+
+// Stores push notification tokens for user devices
+model PushToken {
+  id          String   @id @default(uuid())
+  token       String   @unique
+  device_type String?  // e.g., "android", "ios", "web"
+  device_name String?  // e.g., "Samsung Galaxy S21", "iPhone 13"
+  created_at  DateTime @default(now())
+
+  // Relation to the User model (many-to-one)
+  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  user_id     String   // Foreign key
+}

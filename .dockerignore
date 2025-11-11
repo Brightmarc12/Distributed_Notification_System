@@ -1,0 +1,16 @@
+# Ignore local dependencies
+node_modules
+
+# Ignore environment variables
+.env
+
+# Ignore logs and npm debug files
+npm-debug.log
+*.log
+
+# Ignore OS-specific files
+.DS_Store
+
+# Ignore git files
+.git
+.gitignore

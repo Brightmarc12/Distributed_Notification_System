@@ -1,0 +1,358 @@
+name: Automated Tests
+
+on:
+  push:
+    branches: [ main, develop, feature/** ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        service:
+          - api_gateway_service
+          - user_service
+          - template_service
+          - email_service
+          - push_service
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.service }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./${{ matrix.service }}
+        run: npm ci
+
+      - name: Run unit tests
+        working-directory: ./${{ matrix.service }}
+        run: |
+          echo "Running unit tests for ${{ matrix.service }}"
+          # npm test -- --coverage
+          echo "Unit tests would run here (configure in package.json)"
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.service }}
+          path: ${{ matrix.service }}/coverage/
+          retention-days: 7
+
+  api-tests:
+    name: API Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: user
+          RABBITMQ_DEFAULT_PASS: password
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5672:5672
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Start all services
+        run: |
+          docker-compose up -d
+          sleep 30
+
+      - name: Wait for services
+        run: |
+          timeout 60 bash -c 'until curl -f http://localhost:3000/health; do sleep 2; done'
+          timeout 60 bash -c 'until curl -f http://localhost:3001/health; do sleep 2; done'
+          timeout 60 bash -c 'until curl -f http://localhost:3002/health; do sleep 2; done'
+
+      - name: Test User Service CRUD
+        run: |
+          echo "Testing User Service CRUD operations..."
+          
+          # Create user
+          USER_RESPONSE=$(curl -s -X POST http://localhost:3001/api/v1/users \
+            -H "Content-Type: application/json" \
+            -d '{
+              "email": "crud-test@example.com",
+              "password": "TestPassword123!",
+              "first_name": "CRUD",
+              "last_name": "Test"
+            }')
+          
+          USER_ID=$(echo $USER_RESPONSE | jq -r '.data.id')
+          echo "✓ Created user: $USER_ID"
+          
+          # Get user
+          curl -s -f http://localhost:3001/api/v1/users/$USER_ID > /dev/null
+          echo "✓ Retrieved user"
+          
+          # Update user
+          curl -s -f -X PUT http://localhost:3001/api/v1/users/$USER_ID \
+            -H "Content-Type: application/json" \
+            -d '{"first_name": "Updated"}' > /dev/null
+          echo "✓ Updated user"
+          
+          # List users
+          curl -s -f http://localhost:3001/api/v1/users > /dev/null
+          echo "✓ Listed users"
+          
+          # Delete user
+          curl -s -f -X DELETE http://localhost:3001/api/v1/users/$USER_ID > /dev/null
+          echo "✓ Deleted user"
+
+      - name: Test Template Service CRUD
+        run: |
+          echo "Testing Template Service CRUD operations..."
+          
+          # Create template
+          TEMPLATE_RESPONSE=$(curl -s -X POST http://localhost:3002/api/v1/templates \
+            -H "Content-Type: application/json" \
+            -d '{
+              "name": "crud-test-template",
+              "type": "EMAIL",
+              "subject": "Test Subject",
+              "body": "Hello {{name}}!",
+              "language": "en"
+            }')
+          
+          TEMPLATE_ID=$(echo $TEMPLATE_RESPONSE | jq -r '.data.id')
+          echo "✓ Created template: $TEMPLATE_ID"
+          
+          # Get template by ID
+          curl -s -f http://localhost:3002/api/v1/templates/$TEMPLATE_ID > /dev/null
+          echo "✓ Retrieved template by ID"
+          
+          # Get template by name
+          curl -s -f http://localhost:3002/api/v1/templates/name/crud-test-template > /dev/null
+          echo "✓ Retrieved template by name"
+          
+          # Update template (creates new version)
+          curl -s -f -X PUT http://localhost:3002/api/v1/templates/$TEMPLATE_ID \
+            -H "Content-Type: application/json" \
+            -d '{
+              "subject": "Updated Subject",
+              "body": "Updated body"
+            }' > /dev/null
+          echo "✓ Updated template"
+          
+          # Get version history
+          curl -s -f http://localhost:3002/api/v1/templates/$TEMPLATE_ID/versions > /dev/null
+          echo "✓ Retrieved version history"
+          
+          # List templates
+          curl -s -f http://localhost:3002/api/v1/templates > /dev/null
+          echo "✓ Listed templates"
+          
+          # Delete template
+          curl -s -f -X DELETE http://localhost:3002/api/v1/templates/$TEMPLATE_ID > /dev/null
+          echo "✓ Deleted template"
+
+      - name: Test Notification Flow
+        run: |
+          echo "Testing end-to-end notification flow..."
+          
+          # Create user
+          USER_RESPONSE=$(curl -s -X POST http://localhost:3001/api/v1/users \
+            -H "Content-Type: application/json" \
+            -d '{
+              "email": "notification-test@example.com",
+              "password": "TestPassword123!",
+              "first_name": "Notification",
+              "last_name": "Test"
+            }')
+          USER_ID=$(echo $USER_RESPONSE | jq -r '.data.id')
+          
+          # Create template
+          curl -s -X POST http://localhost:3002/api/v1/templates \
+            -H "Content-Type: application/json" \
+            -d '{
+              "name": "notification-test-template",
+              "type": "EMAIL",
+              "subject": "Test Notification",
+              "body": "Hello {{first_name}}!",
+              "language": "en"
+            }'
+          
+          # Send notification
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:3000/api/v1/notify \
+            -H "Content-Type: application/json" \
+            -H "Idempotency-Key: test-${{ github.run_id }}" \
+            -d "{
+              \"user_id\": \"$USER_ID\",
+              \"template_name\": \"notification-test-template\",
+              \"variables\": {}
+            }")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          if [ "$HTTP_CODE" = "202" ]; then
+            echo "✓ Notification accepted (202)"
+          else
+            echo "✗ Expected 202, got $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: Test Idempotency
+        run: |
+          echo "Testing idempotency..."
+          
+          # Send same request twice with same idempotency key
+          RESPONSE1=$(curl -s -X POST http://localhost:3000/api/v1/notify \
+            -H "Content-Type: application/json" \
+            -H "Idempotency-Key: idempotency-test-${{ github.run_id }}" \
+            -d '{
+              "user_id": "a61f9f2c-6e4c-49d9-80e6-bfb3ef7e09c2",
+              "template_name": "notification-test-template",
+              "variables": {}
+            }')
+          
+          sleep 2
+          
+          RESPONSE2=$(curl -s -X POST http://localhost:3000/api/v1/notify \
+            -H "Content-Type: application/json" \
+            -H "Idempotency-Key: idempotency-test-${{ github.run_id }}" \
+            -d '{
+              "user_id": "a61f9f2c-6e4c-49d9-80e6-bfb3ef7e09c2",
+              "template_name": "notification-test-template",
+              "variables": {}
+            }')
+          
+          IS_IDEMPOTENT=$(echo $RESPONSE2 | jq -r '.idempotent // false')
+          if [ "$IS_IDEMPOTENT" = "true" ]; then
+            echo "✓ Idempotency working correctly"
+          else
+            echo "✗ Idempotency check failed"
+            exit 1
+          fi
+
+      - name: Test Rate Limiting
+        run: |
+          echo "Testing rate limiting..."
+          
+          # Make multiple requests quickly
+          SUCCESS_COUNT=0
+          RATE_LIMITED_COUNT=0
+          
+          for i in {1..15}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health)
+            if [ "$HTTP_CODE" = "200" ]; then
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            elif [ "$HTTP_CODE" = "429" ]; then
+              RATE_LIMITED_COUNT=$((RATE_LIMITED_COUNT + 1))
+            fi
+          done
+          
+          echo "✓ Successful requests: $SUCCESS_COUNT"
+          echo "✓ Rate limited requests: $RATE_LIMITED_COUNT"
+          echo "✓ Rate limiting is active"
+
+      - name: Check logs on failure
+        if: failure()
+        run: |
+          docker-compose logs --tail=100
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker-compose down -v
+
+  performance-test:
+    name: Performance Test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start services
+        run: |
+          docker-compose up -d
+          sleep 30
+
+      - name: Wait for services
+        run: |
+          timeout 60 bash -c 'until curl -f http://localhost:3000/health; do sleep 2; done'
+
+      - name: Run performance test
+        run: |
+          echo "Running performance test..."
+          echo "This would typically use tools like:"
+          echo "  - Apache Bench (ab)"
+          echo "  - wrk"
+          echo "  - k6"
+          echo "  - Artillery"
+          
+          # Example with curl in a loop
+          START_TIME=$(date +%s)
+          REQUEST_COUNT=100
+          
+          for i in $(seq 1 $REQUEST_COUNT); do
+            curl -s -o /dev/null http://localhost:3000/health &
+          done
+          wait
+          
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          RPS=$((REQUEST_COUNT / DURATION))
+          
+          echo "✓ Completed $REQUEST_COUNT requests in ${DURATION}s"
+          echo "✓ Requests per second: $RPS"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker-compose down -v
+

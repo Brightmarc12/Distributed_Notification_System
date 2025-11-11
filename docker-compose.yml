@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  # --- INFRASTRUCTURE ---
+
+  postgres-db:
+    image: postgres:14-alpine
+    container_name: postgres-db
+    environment:
+      POSTGRES_USER: postgres # The user for all services
+      POSTGRES_PASSWORD: betozour30 # The password for all services
+      POSTGRES_DB: user_service_db    # Default DB, others will be created
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:6-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq/
+    environment:
+      - RABBITMQ_DEFAULT_USER=user
+      - RABBITMQ_DEFAULT_PASS=password
+    healthcheck:
+      test: rabbitmq-diagnostics -q check_port_connectivity
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # --- APPLICATION SERVICES ---
+
+  user_service:
+    build: ./user_service
+    container_name: user_service
+    ports:
+      - "3001:3001"
+    env_file:
+      - ./user_service/.env
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  template_service:
+    build: ./template_service
+    container_name: template_service
+    ports:
+      - "3002:3002"
+    env_file:
+      - ./template_service/.env
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+
+  api_gateway_service:
+    build: ./api_gateway_service
+    container_name: api_gateway_service
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./api_gateway_service/.env
+    depends_on:
+      user_service:
+        condition: service_started
+      template_service:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+
+  email_service:
+    build: ./email_service
+    container_name: email_service
+    env_file:
+      - ./email_service/.env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  push_service:
+    build: ./push_service
+    container_name: push_service
+    env_file:
+      - ./push_service/.env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
